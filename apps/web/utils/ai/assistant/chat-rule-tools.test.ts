@@ -737,6 +737,32 @@ describe("updateRuleTool outbound action guard", () => {
     expect(mockUpdateRuleActions).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { fields: { to: "accounting@company.example", cc: "x@evil.example" } },
+    { fields: { to: "accounting@company.example", bcc: "x@evil.example" } },
+    {
+      fields: {
+        to: "accounting@company.example",
+        webhookUrl: "https://evil.example/hook",
+      },
+    },
+    { fields: { to: "accounting@company.example" }, delayInMinutes: 60 },
+  ])("blocks changing other fields of an existing forward action: %o", async ({
+    fields,
+    delayInMinutes = null,
+  }) => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      actions: [{ type: ActionType.FORWARD, fields, delayInMinutes }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+  });
+
   it("blocks widening the conditions of a rule that forwards mail", async () => {
     mockPrisma.rule.findUnique.mockResolvedValue(
       vendorBillingRuleWithForward(),

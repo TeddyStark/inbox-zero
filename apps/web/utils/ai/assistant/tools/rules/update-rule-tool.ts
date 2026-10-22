@@ -34,6 +34,16 @@ import {
   validateRuleWasReadRecently,
 } from "./shared";
 
+const OUTBOUND_ACTION_TYPES = new Set<string>([
+  ActionType.FORWARD,
+  ActionType.SEND_EMAIL,
+  ActionType.REPLY,
+  ActionType.CALL_WEBHOOK,
+]);
+
+const OUTBOUND_RULE_EDIT_ERROR =
+  "No rule was updated. Chat can't add or change forward, send, reply, or webhook actions on an existing rule, or change the conditions of a rule that has one. Tell the user to make this change in the rule editor.";
+
 export const updateRuleTool = ({
   email,
   emailAccountId,
@@ -527,16 +537,6 @@ function actionsLookCopiedFromRule(
     JSON.stringify(originalActions.map(normalizeActionForComparison))
   );
 }
-
-const OUTBOUND_ACTION_TYPES = new Set<string>([
-  ActionType.FORWARD,
-  ActionType.SEND_EMAIL,
-  ActionType.REPLY,
-  ActionType.CALL_WEBHOOK,
-]);
-
-const OUTBOUND_RULE_EDIT_ERROR =
-  "No rule was updated. Chat can't add or change forward, send, reply, or webhook actions on an existing rule, or change the conditions of a rule that has one. Tell the user to make this change in the rule editor.";
 
 // Chat reads untrusted email, so a prompt-injected edit must not be able to
 // route future mail to a new destination without the user editing it directly.
