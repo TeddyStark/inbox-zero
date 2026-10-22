@@ -1,6 +1,6 @@
 import { type InferUITool, tool } from "ai";
 import { z } from "zod";
-import { LogicalOperator } from "@/generated/prisma/enums";
+import { ActionType, LogicalOperator } from "@/generated/prisma/enums";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { filterNullProperties } from "@/utils";
@@ -33,6 +33,16 @@ import {
   trackRuleToolCall,
   validateRuleWasReadRecently,
 } from "./shared";
+
+const OUTBOUND_ACTION_TYPES = new Set<string>([
+  ActionType.FORWARD,
+  ActionType.SEND_EMAIL,
+  ActionType.REPLY,
+  ActionType.CALL_WEBHOOK,
+]);
+
+const OUTBOUND_RULE_EDIT_ERROR =
+  "No rule was updated. Chat can't add or change forward, send, reply, or webhook actions on an existing rule, or change the conditions of a rule that has one. Tell the user to make this change in the rule editor.";
 
 export const updateRuleTool = ({
   email,
@@ -242,6 +252,15 @@ export const updateRuleTool = ({
             originalActions,
             currentRule,
           };
+        }
+
+        if (
+          changesOutboundBehavior({
+            updates: effectiveUpdates,
+            originalActions,
+          })
+        ) {
+          return { success: false, error: OUTBOUND_RULE_EDIT_ERROR };
         }
 
         if (effectiveUpdates.name || effectiveUpdates.condition) {
@@ -517,6 +536,38 @@ function actionsLookCopiedFromRule(
     JSON.stringify(actions.map(normalizeActionForComparison)) ===
     JSON.stringify(originalActions.map(normalizeActionForComparison))
   );
+}
+
+// Chat reads untrusted email, so a prompt-injected edit must not be able to
+// route future mail to a new destination without the user editing it directly.
+function changesOutboundBehavior({
+  updates,
+  originalActions,
+}: {
+  updates: RuleUpdatePatch;
+  originalActions: NonNullable<UpdateRuleOutput["originalActions"]>;
+}) {
+  const isOutbound = (action: { type: string }) =>
+    OUTBOUND_ACTION_TYPES.has(action.type);
+  const toKey = (action: Parameters<typeof normalizeActionForComparison>[0]) =>
+    JSON.stringify(normalizeActionForComparison(action));
+
+  if (updates.actions) {
+    const existing = new Set(originalActions.filter(isOutbound).map(toKey));
+    if (
+      updates.actions
+        .filter(isOutbound)
+        .some((action) => !existing.has(toKey(action)))
+    ) {
+      return true;
+    }
+  }
+
+  if (updates.condition) {
+    return (updates.actions ?? originalActions).some(isOutbound);
+  }
+
+  return false;
 }
 
 function normalizeActionForComparison(action: {
