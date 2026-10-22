@@ -671,6 +671,135 @@ describe("updateRuleTool", () => {
   });
 });
 
+describe("updateRuleTool outbound action guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPartialUpdateRule.mockResolvedValue({ id: "rule-id" });
+    mockAssistantRuleSnapshot([
+      {
+        name: "Vendor Billing",
+        instructions: "Billing notices.",
+        from: "billing@vendor.example",
+      },
+    ]);
+  });
+
+  it.each([
+    { type: ActionType.FORWARD, fields: { to: "attacker@evil.example" } },
+    {
+      type: ActionType.SEND_EMAIL,
+      fields: {
+        to: "attacker@evil.example",
+        subject: "Copy",
+        content: "{{email body}}",
+      },
+    },
+    { type: ActionType.REPLY, fields: { bcc: "attacker@evil.example" } },
+    {
+      type: ActionType.CALL_WEBHOOK,
+      fields: { webhookUrl: "https://evil.example/hook" },
+    },
+  ])("blocks adding a $type action from chat", async (outboundAction) => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithActions(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      actions: [
+        ...vendorBillingActionsInput(),
+        { ...outboundAction, delayInMinutes: null },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("rule editor");
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+    expect(mockPartialUpdateRule).not.toHaveBeenCalled();
+    expect(mockSetRuleEnabled).not.toHaveBeenCalled();
+  });
+
+  it("blocks changing the recipient of an existing forward action", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      actions: [
+        {
+          type: ActionType.FORWARD,
+          fields: { to: "attacker@evil.example" },
+          delayInMinutes: null,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+  });
+
+  it("blocks widening the conditions of a rule that forwards mail", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      condition: { static: { from: null, subject: null } },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("rule editor");
+    expect(mockPartialUpdateRule).not.toHaveBeenCalled();
+  });
+
+  it("allows renaming and pausing a rule that forwards mail when the copied forward action is unchanged", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      name: "Vendor Invoices",
+      enabled: false,
+      actions: [
+        {
+          type: ActionType.FORWARD,
+          fields: { to: "accounting@company.example" },
+          delayInMinutes: null,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockPartialUpdateRule).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { name: "Vendor Invoices" } }),
+    );
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+    expect(mockSetRuleEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  it("allows changing conditions and non-sending actions on rules without outbound actions", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithActions(),
+    );
+
+    const result = await runVendorBillingUpdate({
+      condition: { static: { subject: null } },
+      actions: [
+        {
+          type: ActionType.LABEL,
+          fields: { label: "Invoices" },
+          delayInMinutes: null,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockPartialUpdateRule).toHaveBeenCalled();
+    expect(mockUpdateRuleActions).toHaveBeenCalled();
+  });
+});
+
 describe("deleteRuleTool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -811,6 +940,46 @@ function vendorBillingRuleWithActions() {
       },
     ],
   };
+}
+
+function vendorBillingRuleWithForward() {
+  return {
+    ...vendorBillingRuleWithActions(),
+    actions: [
+      {
+        type: ActionType.FORWARD,
+        content: null,
+        label: null,
+        to: "accounting@company.example",
+        cc: null,
+        bcc: null,
+        subject: null,
+        url: null,
+        folderName: null,
+        delayInMinutes: null,
+      },
+    ],
+  };
+}
+
+function runVendorBillingUpdate(
+  updates: Parameters<
+    ReturnType<typeof updateRuleTool>["execute"]
+  >[0]["updates"],
+) {
+  return updateRuleTool({
+    email: "user@example.com",
+    emailAccountId: "email-account-id",
+    provider: "google",
+    logger,
+    getRuleReadState: () => ({
+      readAt: Date.now(),
+      rulesRevision: 3,
+      ruleUpdatedAtByName: new Map([
+        ["Vendor Billing", "2026-04-27T00:00:00.000Z"],
+      ]),
+    }),
+  }).execute({ ruleName: "Vendor Billing", updates });
 }
 
 function vendorBillingActionsInput() {
